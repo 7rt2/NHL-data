@@ -1,0 +1,168 @@
+---
+title: "NHL Part 1"
+author: "Richard Thomas"
+date: "November 18, 2016"
+output: 
+    md_document:
+        variant: markdown_github
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r code1, echo = FALSE, include = FALSE}
+#load required libraries
+library(dplyr)
+library(ggplot2)
+library(gridExtra)
+
+#set the working directory
+setwd("~/GitHub/NHL-data")
+
+#read in data from Corsica and Hockey Reference (HR)
+corsica_5v5 <- read.csv("5v5 team stats corsica.csv")
+standings <- read.csv("standings hockeyreference.csv")
+
+#change the Year column from HR match the Season column in Corsica
+standings$Year <- gsub("-", "", standings$Year)
+standings$Year <- as.integer(standings$Year)
+
+#remove "." in team names in Corsica data
+corsica_5v5$Team <- gsub(".", "", corsica_5v5$Team, fixed = TRUE)
+
+#create list of team names to match between Corsica and HR
+team_names <- as.data.frame(unique(corsica_5v5$Team))
+colnames(team_names) = c("short")
+team_names$long <- c("Anaheim", "Arizona", "Winnipeg", "Boston", "Buffalo", "Carolina", "Columbus", "Calgary", "Chicago", "Colorado", "Dallas", "Detroit", "Edmonton", "Florida", "Los Angeles", "Minnesota", "Montreal", "New Jersey", "Nashville", "NY Islanders", "NY Rangers", "Ottawa", "Philadelphia", "Pittsburgh", "San Jose", "St. Louis", "Tampa Bay", "Toronto", "Vancouver", "Winnipeg", "Washington")
+
+#add column to Corsica with long team name
+corsica_5v5 <- merge(corsica_5v5, team_names, by.x = "Team", by.y = "short", all.x = TRUE)
+
+#Merge the two data sets together based on Year/Season and Team name
+nhl_data <- merge(corsica_5v5, standings, by.x = c("Season", "long"), by.y = c("Year", "Team"))
+
+#create list of unique seasons, in both integer and character
+season_num <- unique(nhl_data$Season)
+seasons <- as.character(unique(nhl_data$Season))
+```
+
+##Introduction
+Having read several articles on advanced stats in hockey, I decided I wanted to look into and investigate some of the data for myself.
+I will be looking at the relationship between some of the statistics, such as between Corsi and winning, and doing basic exploratory analysis of the data, to reproduce the results on my own.
+
+##Data
+I downloaded 5v5 Team Stats data for all of the completed seasons from 2007-2008 to 2015-2016 from www.corsica.hockey as well as the League Summary Team Statistics for the same seasons from hockey-reference.com 
+Using R, I merged these two datasets together based on the season and team names, giving me a dataframe with a total of 270 (30 teams x 9s seasons) rows and 75 columns of various statistics.
+```{r code2}
+names(nhl_data)
+```
+
+##Team Performance by Season
+The first thing I decided to look at is each team's performance in each season by the position they finished in, 1-30, variable Rank in the dataset.
+*Please note that in this data, "Winnipeg" refers to the current Winnipeg Jets (seasons 2011-2012 to 2015-2016) and to the Atlanta Thrashers prior to that (seasons 2007-2008 to 2010-2011).*
+
+```{r code3, echo = FALSE}
+ggplot(nhl_data) +
+  geom_line (aes(Season,Rank)) +
+  ylim(c(30,1)) + ylab("Position in League Standings") +
+  scale_x_continuous(breaks = season_num, labels = seasons) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5)) +
+  facet_wrap(~long, nrow = 5, ncol = 6)
+```
+
+As can be seen above, the best teams over this period look to have been Boston, Chicago, Los Angeles and Pittsburgh - which makes sense as they are the teams to win the last 8 Stanley Cup Championships.  The Detroit Red Wings won in 2007-2008, the first season in this dataset, and have been in decline since.  The worst teams over this period have been Carolina, Edmonton, Toronto and Winnipeg.
+
+##Team Average Age
+The next thing I looked at was the distribution of the average age of each team in each season.  In addition, I wanted to see if there was a relationship between the average age of a team and their Points % (points divided by maximum possible points).  I have decided to use Points % instead of the number of points earned in a season to account for the shortened season in 2012-2013 where only 48 games were played instead of 82.
+
+```{r code4, echo = FALSE, include = FALSE}
+lm_eqn <- function(nhl_data){
+  m <- lm(PTS. ~ AvAge, nhl_data);
+  eq <- substitute(italic(R)^2~"="~r2, 
+                   list(r2 = format(summary(m)$r.squared, digits = 3)))
+  as.character(as.expression(eq));                 
+}
+```
+```{r code5,echo = FALSE}
+avage1 <- ggplot(nhl_data) +
+  geom_density(aes(AvAge)) + geom_vline(xintercept = mean(nhl_data$AvAge)) +
+  xlab("Team Average Age")
+
+avage2 <- ggplot(nhl_data, aes(AvAge, PTS.)) + 
+  geom_point() + 
+  geom_smooth(method = "lm", se = FALSE, formula = y ~ x) +
+  geom_text(x = 31, y = 0.8, label = lm_eqn(nhl_data), parse = TRUE) +
+  xlab("Team Average Age") + ylab("Points %")
+
+grid.arrange(avage1, avage2)
+```
+
+The average age is represented by the vertical line in the first graph, and is just below 28 years.  The distribution is skewed to the right.
+
+With an $R^2$ value less than 0.05, there is not a strong relationship between a team's average age and the percentage of points earned.
+
+##Corsi and Fenwick Percentage
+Corsi and Fenwick are some of the most talked about 'advanced stats' in hockey, and are a proxy for puck possession.  They are based off of shot attempts, and the formula for each are as follows:
+
+Corsi = Shot Attempts = Shots + Missed Shots + Blocked Shots
+
+Fenwick = Shots + Missed Shots
+
+The idea is that outshooting the other team, and therefore having a higher Corsi or Fenwick percentage, should lead to scoring more goals than the opposition and to more wins.
+
+```{r code6, echo = FALSE, include = FALSE}
+r2_corsi <- function(nhl_data){
+  m <- lm(PTS. ~ CF., nhl_data);
+  eq <- substitute(italic(R)^2~"="~r2, 
+                   list(r2 = format(summary(m)$r.squared, digits = 3)))
+  as.character(as.expression(eq));                 
+}
+
+r2_fenwick <- function(nhl_data){
+  m <- lm(PTS. ~ FF., nhl_data);
+  eq <- substitute(italic(R)^2~"="~r2, 
+                   list(r2 = format(summary(m)$r.squared, digits = 3)))
+  as.character(as.expression(eq));                 
+}
+```
+```{r code7, echo = FALSE}
+corsi_pts <- ggplot(nhl_data) +
+  geom_point(aes(PTS.,CF.)) +
+  geom_smooth(aes(PTS., CF.), method = "lm", se = FALSE) +
+  geom_text(x = 0.7, y = 40, label = r2_corsi(nhl_data), parse = TRUE) +
+  xlab("Points %") + ylab("Corsi %")
+
+fenwick_pts <- ggplot(nhl_data) +
+  geom_point(aes(PTS.,FF.)) +
+  geom_smooth(aes(PTS., FF.), method = "lm", se = FALSE) +
+  geom_text(x = 0.7, y = 40, label = r2_fenwick(nhl_data), parse = TRUE) +
+  xlab("Points %") + ylab("Fenwick %")
+
+grid.arrange(corsi_pts, fenwick_pts)
+```
+
+As shown above, the plots for both Corsi and Fenwick look quite similar.  Given the $R^2$ values, we can conclude that Fenwick % is slightly more correlated with Points % and winning.  Although, a postive correlation exists it is not very strong.
+
+What if we only use the seasons with a complete 82 game schedule,  dismissing the 48 game season as perhaps too small of a sample for Fenwick % to be correlated with Points %.
+
+```{r code8, echo = FALSE}
+full_seasons <- filter(nhl_data, Season != "20122013")
+
+r2_fenwick <- function(full_seasons){
+  m <- lm(PTS. ~ FF., full_seasons);
+  eq <- substitute(italic(R)^2~"="~r2, 
+                   list(r2 = format(summary(m)$r.squared, digits = 3)))
+  as.character(as.expression(eq));                 
+}
+
+ggplot(full_seasons) +
+  geom_point(aes(PTS.,FF.)) +
+  geom_smooth(aes(PTS., FF.), method = "lm", se = FALSE) +
+  geom_text(x = 0.7, y = 40, label = r2_fenwick(full_seasons), parse = TRUE) +
+  xlab("Points %") + ylab("Fenwick %")
+```
+
+We see a slight increase in the $R^2$ value, but it is still not a strong positive correlation.  Therefore, while Corsi and Fenwick % can be considered a factor in the percentage of points a team wins, it is not the only factor that should be looked at when evaluating a team's performance.
+
+*The complete R code and data I used can be found in my github repository: .*
